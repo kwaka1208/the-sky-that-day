@@ -61,9 +61,9 @@ export default function App() {
     constellations: true,
     labels: true,
     planets: true,
-    weather: true,
-    lightPollution: true,
-    terrain: true,
+    weather: false,
+    lightPollution: false,
+    terrain: false,
   });
 
   useEffect(() => {
@@ -255,16 +255,18 @@ export default function App() {
           </div>
 
           <div className="sky-card" ref={skyCardRef}>
-            <button
-              className="fullscreen-button"
-              type="button"
-              onClick={() => void toggleFullscreen()}
-              disabled={!document.fullscreenEnabled}
-              aria-label={isFullscreen ? 'フルスクリーンを終了' : '星空をフルスクリーン表示'}
-            >
-              <span aria-hidden="true">{isFullscreen ? '↙' : '↗'}</span>
-              <strong>{isFullscreen ? '終了' : '全画面'}</strong>
-            </button>
+            {!deviceSky.isMobile && (
+              <button
+                className="fullscreen-button"
+                type="button"
+                onClick={() => void toggleFullscreen()}
+                disabled={!document.fullscreenEnabled}
+                aria-label={isFullscreen ? 'フルスクリーンを終了' : '星空をフルスクリーン表示'}
+              >
+                <span aria-hidden="true">{isFullscreen ? '↙' : '↗'}</span>
+                <strong>{isFullscreen ? '終了' : '全画面'}</strong>
+              </button>
+            )}
             {deviceSky.isMobile && (
               <button
                 className={`compass-toggle${compassEnabled ? ' active' : ''}`}

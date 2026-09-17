@@ -5,13 +5,26 @@ const EARTH_RADIUS = 6_371_000;
 const EFFECTIVE_EARTH_RADIUS = EARTH_RADIUS * 7 / 6;
 const DISTANCES_KM = [.25, .5, 1, 2, 4, 8, 16, 30, 50];
 const AZIMUTH_STEP = 10;
+const MAX_ATTEMPTS = 3;
+const MAX_FALLBACK_RETRY_DELAY_MS = 30_000;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const IN_FLIGHT_ABORT_GRACE_MS = 50;
 const cache = new Map<string, TerrainProfile>();
+const inFlight = new Map<string, InFlightEntry>();
+let rateLimitedUntil = 0;
 
 interface SamplePoint {
   latitude: number;
   longitude: number;
   azimuth?: number;
   distanceKm?: number;
+}
+
+interface InFlightEntry {
+  controller: AbortController;
+  promise: Promise<TerrainProfile>;
+  consumers: number;
+  abortTimer: number | null;
 }
 
 function destination(latitude: number, longitude: number, azimuth: number, distanceKm: number) {
@@ -31,10 +44,14 @@ function destination(latitude: number, longitude: number, azimuth: number, dista
   };
 }
 
+function abortError() {
+  return new DOMException('The operation was aborted.', 'AbortError');
+}
+
 function waitForRetry(milliseconds: number, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
     if (signal?.aborted) {
-      reject(new DOMException('The operation was aborted.', 'AbortError'));
+      reject(abortError());
       return;
     }
     const timer = window.setTimeout(() => {
@@ -43,19 +60,41 @@ function waitForRetry(milliseconds: number, signal?: AbortSignal) {
     }, milliseconds);
     const handleAbort = () => {
       window.clearTimeout(timer);
-      reject(new DOMException('The operation was aborted.', 'AbortError'));
+      reject(abortError());
     };
     signal?.addEventListener('abort', handleAbort, { once: true });
   });
 }
 
+function retryDelay(response: Response, attempt: number) {
+  const header = response.headers.get('Retry-After');
+  if (header) {
+    const seconds = Number(header);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return Math.min(MAX_TIMER_DELAY_MS, Math.max(250, seconds * 1_000));
+    }
+    const retryAt = Date.parse(header);
+    if (Number.isFinite(retryAt)) {
+      return Math.min(MAX_TIMER_DELAY_MS, Math.max(250, retryAt - Date.now()));
+    }
+  }
+  const exponentialDelay = 1_000 * 2 ** attempt;
+  const jitter = Math.random() * 400;
+  return Math.min(MAX_FALLBACK_RETRY_DELAY_MS, exponentialDelay + jitter);
+}
+
 async function fetchElevationBatch(url: string, signal?: AbortSignal) {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    const cooldown = rateLimitedUntil - Date.now();
+    if (cooldown > 0) await waitForRetry(cooldown, signal);
+
     const response = await fetch(url, { signal, headers: { Accept: 'application/json' } });
-    if (response.status !== 429 || attempt === 2) return response;
-    const retryAfter = Number(response.headers.get('Retry-After'));
-    const delay = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1_000 : 800 * 2 ** attempt;
-    await waitForRetry(delay, signal);
+    if (response.status !== 429) return response;
+
+    const delay = retryDelay(response, attempt);
+    rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + delay);
+    if (attempt < MAX_ATTEMPTS - 1) await waitForRetry(delay, signal);
+    else return response;
   }
   throw new Error('周辺標高を取得できませんでした。');
 }
@@ -80,14 +119,7 @@ async function requestElevations(points: SamplePoint[], signal?: AbortSignal) {
   return result;
 }
 
-export async function fetchTerrainProfile(
-  location: ObservationLocation,
-  signal?: AbortSignal,
-): Promise<ConditionResult<TerrainProfile>> {
-  const cacheKey = `${location.latitude.toFixed(4)},${location.longitude.toFixed(4)}`;
-  const cached = cache.get(cacheKey);
-  if (cached) return { status: 'available', data: cached, message: '保存済みの地形プロファイルを使用しています。' };
-
+async function createTerrainProfile(location: ObservationLocation, signal: AbortSignal): Promise<TerrainProfile> {
   const points: SamplePoint[] = [{ latitude: location.latitude, longitude: location.longitude }];
   for (let azimuth = 0; azimuth < 360; azimuth += AZIMUTH_STEP) {
     for (const distanceKm of DISTANCES_KM) {
@@ -110,7 +142,7 @@ export async function fetchTerrainProfile(
     }
     return { azimuth, altitude: Math.max(-5, Math.min(45, maximumAltitude)) };
   });
-  const profile: TerrainProfile = {
+  return {
     observerElevation,
     samples,
     provenance: {
@@ -122,6 +154,83 @@ export async function fetchTerrainProfile(
       note: 'DEMと地球曲率（標準屈折を考慮）から算出。建物や樹木など局所的な遮蔽物は含みません。',
     },
   };
-  cache.set(cacheKey, profile);
-  return { status: 'available', data: profile, message: '周辺標高から地平線を推定しました。' };
+}
+
+function startTerrainRequest(cacheKey: string, location: ObservationLocation) {
+  const controller = new AbortController();
+  const promise = createTerrainProfile(location, controller.signal).then((profile) => {
+    cache.set(cacheKey, profile);
+    return profile;
+  });
+  const entry: InFlightEntry = { controller, promise, consumers: 0, abortTimer: null };
+  inFlight.set(cacheKey, entry);
+
+  const cleanup = () => {
+    if (entry.abortTimer !== null) window.clearTimeout(entry.abortTimer);
+    entry.abortTimer = null;
+    if (inFlight.get(cacheKey) === entry) inFlight.delete(cacheKey);
+  };
+  void promise.then(cleanup, cleanup);
+  return entry;
+}
+
+function waitForTerrainRequest(cacheKey: string, entry: InFlightEntry, signal?: AbortSignal) {
+  if (signal?.aborted) return Promise.reject<TerrainProfile>(abortError());
+
+  entry.consumers += 1;
+  if (entry.abortTimer !== null) {
+    window.clearTimeout(entry.abortTimer);
+    entry.abortTimer = null;
+  }
+
+  return new Promise<TerrainProfile>((resolve, reject) => {
+    let settled = false;
+    const release = () => {
+      entry.consumers = Math.max(0, entry.consumers - 1);
+      if (entry.consumers > 0 || inFlight.get(cacheKey) !== entry || entry.abortTimer !== null) return;
+      entry.abortTimer = window.setTimeout(() => {
+        entry.abortTimer = null;
+        if (entry.consumers === 0 && inFlight.get(cacheKey) === entry) {
+          inFlight.delete(cacheKey);
+          entry.controller.abort();
+        }
+      }, IN_FLIGHT_ABORT_GRACE_MS);
+    };
+    const complete = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', handleAbort);
+      release();
+      callback();
+    };
+    const handleAbort = () => complete(() => reject(abortError()));
+
+    signal?.addEventListener('abort', handleAbort, { once: true });
+    void entry.promise.then(
+      (profile) => complete(() => resolve(profile)),
+      (error: unknown) => complete(() => reject(error)),
+    );
+  });
+}
+
+export async function fetchTerrainProfile(
+  location: ObservationLocation,
+  signal?: AbortSignal,
+): Promise<ConditionResult<TerrainProfile>> {
+  const cacheKey = `${location.latitude.toFixed(4)},${location.longitude.toFixed(4)}`;
+  const cached = cache.get(cacheKey);
+  if (cached) return { status: 'available', data: cached, message: '保存済みの地形プロファイルを使用しています。' };
+  if (signal?.aborted) throw abortError();
+
+  const existing = inFlight.get(cacheKey);
+  const profile = await waitForTerrainRequest(
+    cacheKey,
+    existing ?? startTerrainRequest(cacheKey, location),
+    signal,
+  );
+  return {
+    status: 'available',
+    data: profile,
+    message: existing ? '取得中の地形プロファイルを共有しました。' : '周辺標高から地平線を推定しました。',
+  };
 }

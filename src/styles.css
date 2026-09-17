@@ -215,16 +215,25 @@ h1 { margin: 0; font-size: clamp(31px, 3vw, 43px); line-height: 1.3; font-weight
   .header-note { display: none; }
   .control-panel { padding: 36px 22px 28px; }
   h1 { font-size: 32px; }
-  .stage-heading { min-height: 98px; gap: 16px; }
+  .stage-heading { min-height: 98px; gap: 16px; margin-right: 16px; margin-left: 16px; }
   .stage-heading h2 { font-size: 19px; }
   .mode-badge { flex-shrink: 0; }
-  .sky-stage { padding-right: 12px; padding-left: 12px; }
-  .sky-card { min-height: 480px; height: 72vh; }
+  .sky-stage { padding-right: 0; padding-left: 0; }
+  .sky-card {
+    height: calc(100vh - 16px);
+    height: calc(100svh - 16px);
+    min-height: 0;
+    max-height: 840px;
+    border-right: 0;
+    border-left: 0;
+  }
   .sky-stats { padding: 0 14px; }
   .sky-stats > div { min-width: 0; flex: 1; padding: 0 10px; }
   .sky-stats > div:first-child { padding-left: 0; }
   .sky-stats strong { font-size: 11px; }
   .canvas-hint { display: none; }
+  .observation-panel,
+  .stage-footnote { margin-right: 16px; margin-left: 16px; }
   .stage-footnote { padding: 0 5px; }
 }
 
@@ -255,7 +264,9 @@ h1 { margin: 0; font-size: clamp(31px, 3vw, 43px); line-height: 1.3; font-weight
 .compass-toggle strong { font-size: 9px; font-weight: 500; letter-spacing: .04em; }
 
 @media (max-width: 1024px) and (hover: none) and (pointer: coarse) {
-  .sky-card:fullscreen .compass-toggle { top: max(28px, env(safe-area-inset-top)); right: max(112px, calc(env(safe-area-inset-right) + 106px)); }
+  .fullscreen-button { display: none; }
+  .compass-toggle { right: max(20px, env(safe-area-inset-right)); }
+  .sky-card:fullscreen .compass-toggle { top: max(28px, env(safe-area-inset-top)); right: max(20px, env(safe-area-inset-right)); }
 }
 
 @media (max-width: 520px) {
@@ -448,12 +459,12 @@ summary:focus-visible { outline: 2px solid var(--coral); outline-offset: 3px; }
   .control-panel { padding-right: 18px; padding-left: 18px; }
   .fullscreen-button { right: 16px; min-width: 48px; width: 48px; height: 48px; padding: 0; }
   .sky-card:fullscreen .fullscreen-button { right: max(16px, env(safe-area-inset-right)); }
-  .compass-toggle { right: 76px; min-width: 126px; }
+  .compass-toggle { right: max(16px, env(safe-area-inset-right)); min-width: 126px; }
   .sky-stats span { font-size: 8px; }
 }
 
 @media (max-width: 620px) and (orientation: portrait) {
-  .sky-card .compass-toggle { top: max(82px, calc(env(safe-area-inset-top) + 66px)); right: max(16px, env(safe-area-inset-right)); }
+  .sky-card .compass-toggle { top: max(20px, env(safe-area-inset-top)); right: max(16px, env(safe-area-inset-right)); }
   .device-status { top: max(82px, calc(env(safe-area-inset-top) + 66px)); }
 }
 
@@ -629,4 +640,53 @@ body { line-height: 1.5; }
   .sky-stats { align-items: stretch; }
   .sky-stats > div { display: flex; flex-direction: column; justify-content: center; }
   .target-card { bottom: max(142px, calc(env(safe-area-inset-bottom) + 136px)); }
+}
+
+/* Higher-contrast text and state treatments */
+.field input::placeholder {
+  color: #a9b8c5;
+  opacity: 1;
+}
+.field input:focus::placeholder { color: #c1ccd5; }
+
+.search-input-wrap > span { color: #91a9ba; }
+.details-toggle { color: #afbfcc; }
+.details-toggle:hover,
+.details-toggle:focus-visible { color: #edf4f7; }
+.details-toggle[aria-expanded='true'] { color: #b9d8d5; }
+
+button:disabled { opacity: 1; }
+.search-input-wrap button:disabled {
+  color: #17283a;
+  background: #91afb2;
+}
+.current-location:disabled,
+.fullscreen-button:disabled {
+  color: #9fb0bf;
+  border-color: rgba(210, 227, 237, .24);
+  background: #0b1c30;
+}
+
+.condition-heading strong {
+  color: #adc0c8;
+  background: rgba(109, 171, 182, .08);
+}
+.condition-card.status-estimated .condition-heading strong {
+  color: #efb89e;
+  background: rgba(239, 168, 142, .08);
+}
+.condition-card.status-unavailable .condition-heading strong,
+.condition-card.status-error .condition-heading strong {
+  color: #edaa98;
+  background: rgba(239, 168, 142, .1);
+}
+.condition-card.status-off {
+  opacity: 1;
+  border-color: rgba(210, 227, 237, .16);
+  background: rgba(7, 22, 38, .78);
+}
+.condition-card.status-off .condition-heading strong {
+  color: #afbeca;
+  border-color: rgba(210, 227, 237, .24);
+  background: rgba(210, 227, 237, .07);
 }

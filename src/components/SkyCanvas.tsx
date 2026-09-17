@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { horizonAltitudeAt, isPointVisible } from '../astronomy/horizon';
 import { CONSTELLATIONS } from '../data/stars';
 import type {
@@ -90,18 +90,18 @@ export function SkyCanvas({
   const animationFrameRef = useRef(0);
   const [selectedTarget, setSelectedTarget] = useState<SkyPoint | null>(null);
 
-  const requestDraw = () => {
+  const requestDraw = useCallback(() => {
     if (animationFrameRef.current) return;
     animationFrameRef.current = requestAnimationFrame(() => {
       animationFrameRef.current = 0;
       drawRef.current?.();
     });
-  };
+  }, []);
 
   useEffect(() => {
     deviceViewRef.current = deviceView;
     requestDraw();
-  }, [deviceView]);
+  }, [deviceView, requestDraw]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -362,9 +362,23 @@ export function SkyCanvas({
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = 0;
     };
-  }, [sky, options, deviceMode]);
+  }, [sky, options, deviceMode, requestDraw]);
 
   const tracking = deviceMode && Boolean(deviceView);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || tracking) return;
+
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      zoomRef.current = Math.max(.82, Math.min(2.2, zoomRef.current - event.deltaY * .001));
+      requestDraw();
+    };
+
+    canvas.addEventListener('wheel', handleWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', handleWheel);
+  }, [tracking, requestDraw]);
 
   return (
     <div className={`sky-canvas-wrap${tracking ? ' device-tracking' : ''}`}>
@@ -386,12 +400,6 @@ export function SkyCanvas({
         }}
         onPointerUp={() => { dragRef.current = null; }}
         onPointerCancel={() => { dragRef.current = null; }}
-        onWheel={(event) => {
-          if (tracking) return;
-          event.preventDefault();
-          zoomRef.current = Math.max(.82, Math.min(2.2, zoomRef.current - event.deltaY * .001));
-          requestDraw();
-        }}
       />
       {!tracking && (
         <div className="canvas-tools" aria-label="星図操作">
