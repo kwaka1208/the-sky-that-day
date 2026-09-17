@@ -545,6 +545,11 @@ body { line-height: 1.5; }
 .conditions-controls-heading h3 { color: #c4d0d9; font-size: 1.125rem; line-height: 1.45; }
 .conditions-control-group > p { color: #9fb1c1; font-size: .875rem; line-height: 1.5; }
 
+@media (min-width: 621px) {
+  .field-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .panel-switch-row { justify-content: flex-start; }
+}
+
 .stage-kicker { color: #91a4b6 !important; font-size: .75rem !important; }
 .stage-heading { height: auto; flex-wrap: wrap; }
 .stage-heading > div { min-width: 0; flex: 1 1 220px; }
