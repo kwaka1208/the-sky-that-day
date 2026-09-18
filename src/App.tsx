@@ -45,8 +45,16 @@ async function settleCondition<T>(promise: Promise<ConditionResult<T>>, signal: 
   }
 }
 
+function getTodayDate() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export default function App() {
-  const [date, setDate] = useState('2000-01-01');
+  const [date, setDate] = useState(getTodayDate());
   const [time, setTime] = useState('21:00');
   const [location, setLocation] = useState(initialLocation);
   const [magnitudeLimit, setMagnitudeLimit] = useState(6.5);

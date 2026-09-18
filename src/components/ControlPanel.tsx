@@ -117,7 +117,13 @@ export function ControlPanel({
           <button key={place.id} type="button" onClick={() => void selectLocation(place)}><span aria-hidden="true">⌖</span><span>{place.name}</span></button>
         ))}</div>}
         <button className="current-location" type="button" onClick={() => void useCurrentLocation()} disabled={busy}><span aria-hidden="true">◎</span> 現在地を使う</button>
-        <p className="selected-location"><span aria-hidden="true">●</span><span>{location.name}</span></p>
+        <div className="selected-location-card">
+          <div className="selected-location-label">選択中の観測地点</div>
+          <div className="selected-location-name">
+            <span aria-hidden="true">📍</span>
+            <span>{location.name}</span>
+          </div>
+        </div>
         <p className="field-status" aria-live="polite">{status}</p>
         <button className="details-toggle" type="button" onClick={() => setDetailsOpen((open) => !open)} aria-expanded={detailsOpen}>座標とタイムゾーンを手動設定 <span>{detailsOpen ? '−' : '+'}</span></button>
         {detailsOpen && <div className="location-details">
