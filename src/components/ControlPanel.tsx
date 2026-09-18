@@ -42,14 +42,16 @@ export function ControlPanel({
   const [detailsOpen, setDetailsOpen] = useState(false);
 
   const handleDateChange = (value: string) => {
-    // 日付の範囲をバリデーション
-    if (value < '1900-01-01') {
-      onDateChange('1900-01-01');
-      return;
-    }
-    if (value > '2100-12-31') {
-      onDateChange('2100-12-31');
-      return;
+    // 完全な日付形式(YYYY-MM-DD)の場合のみバリデーション
+    if (value.length === 10) {
+      if (value < '1900-01-01') {
+        onDateChange('1900-01-01');
+        return;
+      }
+      if (value > '2100-12-31') {
+        onDateChange('2100-12-31');
+        return;
+      }
     }
     onDateChange(value);
   };
