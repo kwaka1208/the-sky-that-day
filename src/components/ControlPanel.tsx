@@ -2,6 +2,9 @@ import { useState, type FormEvent } from 'react';
 import { getCurrentCoordinates, resolveTimezone, reverseLocation, searchLocations } from '../services/location';
 import type { LocationSearchResult, ObservationLocation } from '../types';
 
+const MIN_DATE = '1900-01-01';
+const MAX_DATE = '2100-12-31';
+
 interface ControlPanelProps {
   date: string;
   time: string;
@@ -41,19 +44,22 @@ export function ControlPanel({
   const [busy, setBusy] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
 
+  // 入力中はクランプしない。type="date" は年を1桁打った時点で 0002-09-18 のような
+  // 完全形式の値を発火するため、ここで丸めると年の桁を打ち継げなくなる。
   const handleDateChange = (value: string) => {
-    // 完全な日付形式(YYYY-MM-DD)の場合のみバリデーション
-    if (value.length === 10) {
-      if (value < '1900-01-01') {
-        onDateChange('1900-01-01');
-        return;
-      }
-      if (value > '2100-12-31') {
-        onDateChange('2100-12-31');
-        return;
-      }
-    }
     onDateChange(value);
+  };
+
+  // 範囲外の補正は入力が確定したとき(フォーカスが外れたとき)だけ行う
+  const handleDateBlur = (value: string) => {
+    if (value.length !== 10) return;
+    if (value < MIN_DATE) {
+      onDateChange(MIN_DATE);
+      return;
+    }
+    if (value > MAX_DATE) {
+      onDateChange(MAX_DATE);
+    }
   };
 
   const handleSearch = async (event: FormEvent) => {
@@ -108,7 +114,7 @@ export function ControlPanel({
           <label className="field">
             <span>日付</span>
             <span className="date-input-wrap">
-              <input type="date" min="1900-01-01" max="2100-12-31" value={date} onChange={(event) => handleDateChange(event.target.value)} required />
+              <input type="date" min={MIN_DATE} max={MAX_DATE} value={date} onChange={(event) => handleDateChange(event.target.value)} onBlur={(event) => handleDateBlur(event.target.value)} required />
               <button type="button" onClick={() => onDateChange(todayInTimezone(location.timezone))} aria-label="日付を観測地点の今日に設定">今日</button>
             </span>
           </label>
