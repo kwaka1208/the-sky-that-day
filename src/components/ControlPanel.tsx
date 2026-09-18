@@ -41,6 +41,19 @@ export function ControlPanel({
   const [busy, setBusy] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
 
+  const handleDateChange = (value: string) => {
+    // 日付の範囲をバリデーション
+    if (value < '1900-01-01') {
+      onDateChange('1900-01-01');
+      return;
+    }
+    if (value > '2100-12-31') {
+      onDateChange('2100-12-31');
+      return;
+    }
+    onDateChange(value);
+  };
+
   const handleSearch = async (event: FormEvent) => {
     event.preventDefault();
     if (query.trim().length < 2) { setStatus('地名を2文字以上入力してください。'); return; }
@@ -93,7 +106,7 @@ export function ControlPanel({
           <label className="field">
             <span>日付</span>
             <span className="date-input-wrap">
-              <input type="date" min="1900-01-01" max="2100-12-31" value={date} onChange={(event) => onDateChange(event.target.value)} required />
+              <input type="date" min="1900-01-01" max="2100-12-31" value={date} onChange={(event) => handleDateChange(event.target.value)} required />
               <button type="button" onClick={() => onDateChange(todayInTimezone(location.timezone))} aria-label="日付を観測地点の今日に設定">今日</button>
             </span>
           </label>
