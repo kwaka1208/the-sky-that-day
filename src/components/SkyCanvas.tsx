@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 import { horizonAltitudeAt, isPointVisible } from '../astronomy/horizon';
 import { CONSTELLATIONS } from '../data/stars';
 import type {
@@ -26,7 +27,9 @@ interface Point { x: number; y: number; }
 interface Vector { east: number; north: number; up: number; }
 
 const DEG = Math.PI / 180;
+const RAD = 180 / Math.PI;
 const TARGET_ANGLE = Math.cos(12 * DEG);
+const ROTATE_DEAD_ZONE = 40;
 
 function skyVector(point: Pick<SkyPoint, 'altitude' | 'azimuth'>): Vector {
   const altitude = point.altitude * DEG;
@@ -81,7 +84,8 @@ export function SkyCanvas({
   location,
 }: SkyCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const dragRef = useRef<{ x: number; azimuth: number } | null>(null);
+  const dragRef = useRef<{ angle: number; radius: number } | null>(null);
+  const geometryRef = useRef<{ x: number; y: number; radius: number } | null>(null);
   const azimuthOffsetRef = useRef(0);
   const zoomRef = useRef(1);
   const deviceViewRef = useRef<DeviceSkyView | null>(deviceView);
@@ -130,8 +134,13 @@ export function SkyCanvas({
       const view = deviceMode ? deviceViewRef.current : null;
       const tracking = Boolean(view);
       const axes = view ? cameraAxes(view) : null;
-      const center = { x: width / 2, y: height / 2 - (tracking ? 0 : 8) };
-      const horizonRadius = Math.min(width, height) * .425;
+      const bottomInset = tracking ? 0 : 78;
+      const usableHeight = Math.max(1, height - bottomInset);
+      const center = { x: width / 2, y: tracking ? height / 2 : usableHeight / 2 };
+      const horizonRadius = tracking
+        ? Math.min(width, height) * .425
+        : Math.max(80, Math.min(width, usableHeight) / 2 - 26);
+      geometryRef.current = { x: center.x, y: center.y, radius: horizonRadius };
       const night = sky.sunAltitude <= -10;
       const twilight = sky.sunAltitude > -10 && sky.sunAltitude <= 0;
       const topColor = night ? '#061526' : twilight ? '#17304c' : '#557a9e';
@@ -165,7 +174,7 @@ export function SkyCanvas({
         const distance = ((90 - point.altitude) / 90) * horizonRadius * zoomRef.current;
         if (distance > horizonRadius * 1.04) return null;
         const angle = (point.azimuth - azimuthOffsetRef.current) * DEG;
-        return { x: center.x + Math.sin(angle) * distance, y: center.y - Math.cos(angle) * distance };
+        return { x: center.x - Math.sin(angle) * distance, y: center.y - Math.cos(angle) * distance };
       };
 
       if (night && lightPollution) {
@@ -300,7 +309,7 @@ export function SkyCanvas({
             const altitude = Math.max(0, horizonAltitudeAt(azimuth, terrain));
             const distance = ((90 - altitude) / 90) * horizonRadius * zoomRef.current;
             const angle = (azimuth - azimuthOffsetRef.current) * DEG;
-            const x = center.x + Math.sin(angle) * distance;
+            const x = center.x - Math.sin(angle) * distance;
             const y = center.y - Math.cos(angle) * distance;
             if (azimuth === 0) context.moveTo(x, y);
             else context.lineTo(x, y);
@@ -346,7 +355,7 @@ export function SkyCanvas({
         const directions = [['N', 0], ['E', 90], ['S', 180], ['W', 270]] as const;
         for (const [label, azimuth] of directions) {
           const angle = (azimuth - azimuthOffsetRef.current) * DEG;
-          context.fillText(label, center.x + Math.sin(angle) * (horizonRadius + 17), center.y - Math.cos(angle) * (horizonRadius + 17) + 4);
+          context.fillText(label, center.x - Math.sin(angle) * (horizonRadius + 17), center.y - Math.cos(angle) * (horizonRadius + 17) + 4);
         }
         context.textAlign = 'start';
       }
@@ -380,6 +389,15 @@ export function SkyCanvas({
     return () => canvas.removeEventListener('wheel', handleWheel);
   }, [tracking, requestDraw]);
 
+  const pointerGeometry = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const geometry = geometryRef.current;
+    if (!geometry) return null;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = event.clientX - rect.left - geometry.x;
+    const y = event.clientY - rect.top - geometry.y;
+    return { angle: Math.atan2(x, -y) * RAD, radius: Math.hypot(x, y) };
+  }, []);
+
   return (
     <div className={`sky-canvas-wrap${tracking ? ' device-tracking' : ''}`}>
       <canvas
@@ -390,12 +408,20 @@ export function SkyCanvas({
           : '指定した日時と場所の全天星図。ドラッグで方角、ホイールで拡大率を変更できます。'}
         onPointerDown={(event) => {
           if (tracking) return;
+          const pointer = pointerGeometry(event);
+          if (!pointer) return;
           event.currentTarget.setPointerCapture(event.pointerId);
-          dragRef.current = { x: event.clientX, azimuth: azimuthOffsetRef.current };
+          dragRef.current = pointer;
         }}
         onPointerMove={(event) => {
           if (tracking || !dragRef.current) return;
-          azimuthOffsetRef.current = dragRef.current.azimuth + (dragRef.current.x - event.clientX) * .32;
+          const pointer = pointerGeometry(event);
+          if (!pointer) return;
+          const previous = dragRef.current;
+          dragRef.current = pointer;
+          // 中心付近は角度が暴れるため、基準だけ更新して回転はさせない
+          if (pointer.radius < ROTATE_DEAD_ZONE || previous.radius < ROTATE_DEAD_ZONE) return;
+          azimuthOffsetRef.current += ((pointer.angle - previous.angle + 540) % 360) - 180;
           requestDraw();
         }}
         onPointerUp={() => { dragRef.current = null; }}
@@ -408,7 +434,7 @@ export function SkyCanvas({
           <button type="button" onClick={() => { zoomRef.current = 1; azimuthOffsetRef.current = 0; requestDraw(); }} aria-label="表示をリセット">↺</button>
         </div>
       )}
-      {!deviceMode && <p className="canvas-hint"><span>↔</span> ドラッグして空を見渡す</p>}
+      {!deviceMode && <p className="canvas-hint"><span>↻</span> ドラッグして円盤を回す</p>}
       {deviceMode && (
         <div className="device-sky-hud" aria-live="polite">
           <div className="device-status">
