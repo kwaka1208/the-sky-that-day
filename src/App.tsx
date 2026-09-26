@@ -1,8 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isPointVisible } from './astronomy/horizon';
 import { calculateSky, describeMoonPhase } from './astronomy/sky';
-import { formatObservationDate, localObservationToUtc } from './astronomy/time';
+import {
+  MAX_YEAR,
+  MIN_YEAR,
+  formatObservationDate,
+  localObservationToUtc,
+  zonedObservationStrings,
+} from './astronomy/time';
 import { ControlPanel } from './components/ControlPanel';
+import { DiurnalRotationBar } from './components/DiurnalRotationBar';
+import { GlobeCanvas } from './components/GlobeCanvas';
 import { ObservationConditionsPanel } from './components/ObservationConditionsPanel';
 import { SkyCanvas } from './components/SkyCanvas';
 import { useDeviceSkyView } from './hooks/useDeviceSkyView';
@@ -18,6 +26,7 @@ import type {
   GpsStatus,
   ObservationConditions,
   ObservationLocation,
+  SkyViewMode,
 } from './types';
 
 const initialLocation: ObservationLocation = {
@@ -27,6 +36,12 @@ const initialLocation: ObservationLocation = {
   elevation: 40,
   timezone: 'Asia/Tokyo',
 };
+
+const ENVIRONMENT_FETCH_DELAY = 700;
+// 自動回転は1秒あたり1時間進め、更新は最短でも90ms間隔にまとめる。
+const AUTO_ROTATION_MINUTES_PER_SECOND = 60;
+const AUTO_ROTATION_STEP_MS = 90;
+const AUTO_ROTATION_MAX_GAP_MS = 400;
 
 function loadingEnvironment(): EnvironmentState {
   return {
@@ -60,6 +75,10 @@ export default function App() {
   const [magnitudeLimit, setMagnitudeLimit] = useState(6.5);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [compassEnabled, setCompassEnabled] = useState(false);
+  const [viewMode, setViewMode] = useState<SkyViewMode>('chart');
+  // 入力した観測時刻からのずれ。日周回転で増減する。
+  const [rotationMinutes, setRotationMinutes] = useState(0);
+  const [autoRotating, setAutoRotating] = useState(false);
   const [gpsStatus, setGpsStatus] = useState<GpsStatus>('idle');
   const [environment, setEnvironment] = useState<EnvironmentState>(loadingEnvironment);
   const skyCardRef = useRef<HTMLDivElement>(null);
@@ -88,11 +107,13 @@ export default function App() {
 
   const observation = useMemo(() => {
     try {
-      return { utc: localObservationToUtc(date, time, location.timezone), error: '' };
+      const base = localObservationToUtc(date, time, location.timezone);
+      const utc = new Date(base.getTime() + rotationMinutes * 60_000);
+      return { utc, local: zonedObservationStrings(utc, location.timezone), error: '' };
     } catch (error) {
-      return { utc: null, error: error instanceof Error ? error.message : '観測日時を変換できませんでした。' };
+      return { utc: null, local: null, error: error instanceof Error ? error.message : '観測日時を変換できませんでした。' };
     }
-  }, [date, time, location.timezone]);
+  }, [date, time, location.timezone, rotationMinutes]);
   const observationTimestamp = observation.utc?.getTime() ?? null;
 
   useEffect(() => {
@@ -104,34 +125,40 @@ export default function App() {
     const controller = new AbortController();
     const requestId = ++requestRef.current;
     const signal = controller.signal;
-    setEnvironment(loadingEnvironment());
+    // 日周回転のような連続操作の途中では取得せず、落ち着いてから1回だけ走らせる。
+    const timer = setTimeout(() => {
+      setEnvironment(loadingEnvironment());
 
-    void settleCondition(fetchHistoricalWeather(observation.utc, location, signal), signal)
-      .then((weather) => {
-        if (!signal.aborted && requestRef.current === requestId) {
-          setEnvironment((current) => ({ ...current, weather }));
-        }
-      }).catch(() => {
-        // Aborted requests are superseded by the next observation input.
-      });
-    void settleCondition(fetchLightPollution(observation.utc, location, signal), signal)
-      .then((lightPollution) => {
-        if (!signal.aborted && requestRef.current === requestId) {
-          setEnvironment((current) => ({ ...current, lightPollution }));
-        }
-      }).catch(() => {
-        // Aborted requests are superseded by the next observation input.
-      });
-    void settleCondition(fetchTerrainProfile(location, signal), signal)
-      .then((terrain) => {
-        if (!signal.aborted && requestRef.current === requestId) {
-          setEnvironment((current) => ({ ...current, terrain }));
-        }
-      }).catch(() => {
-        // Aborted requests are superseded by the next observation input.
-      });
+      void settleCondition(fetchHistoricalWeather(observation.utc, location, signal), signal)
+        .then((weather) => {
+          if (!signal.aborted && requestRef.current === requestId) {
+            setEnvironment((current) => ({ ...current, weather }));
+          }
+        }).catch(() => {
+          // Aborted requests are superseded by the next observation input.
+        });
+      void settleCondition(fetchLightPollution(observation.utc, location, signal), signal)
+        .then((lightPollution) => {
+          if (!signal.aborted && requestRef.current === requestId) {
+            setEnvironment((current) => ({ ...current, lightPollution }));
+          }
+        }).catch(() => {
+          // Aborted requests are superseded by the next observation input.
+        });
+      void settleCondition(fetchTerrainProfile(location, signal), signal)
+        .then((terrain) => {
+          if (!signal.aborted && requestRef.current === requestId) {
+            setEnvironment((current) => ({ ...current, terrain }));
+          }
+        }).catch(() => {
+          // Aborted requests are superseded by the next observation input.
+        });
+    }, ENVIRONMENT_FETCH_DELAY);
 
-    return () => controller.abort();
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, [observationTimestamp, location.latitude, location.longitude, location.elevation]);
 
   const conditions = useMemo<ObservationConditions>(() => ({
@@ -149,6 +176,60 @@ export default function App() {
     }
   }, [observation, location, magnitudeLimit, conditions]);
 
+  const stopRotation = useCallback(() => {
+    setRotationMinutes(0);
+    setAutoRotating(false);
+  }, []);
+
+  /** 日周回転を進める。対応年を外れる場合は進めずfalseを返す。 */
+  const shiftRotation = useCallback((deltaMinutes: number) => {
+    if (!observation.utc) return false;
+    try {
+      const shifted = new Date(observation.utc.getTime() + deltaMinutes * 60_000);
+      const { year } = zonedObservationStrings(shifted, location.timezone);
+      if (year < MIN_YEAR || year > MAX_YEAR) return false;
+    } catch {
+      return false;
+    }
+    setRotationMinutes((current) => current + deltaMinutes);
+    return true;
+  }, [observation.utc, location.timezone]);
+
+  const shiftRotationRef = useRef(shiftRotation);
+  shiftRotationRef.current = shiftRotation;
+
+  useEffect(() => {
+    if (!autoRotating) return;
+    let frame = 0;
+    let previous = performance.now();
+    let carried = 0;
+    const step = (now: number) => {
+      const elapsed = now - previous;
+      previous = now;
+      // タブが隠れるとフレームが止まるため、空いた時間は進めずに捨てる。
+      if (elapsed > AUTO_ROTATION_MAX_GAP_MS) {
+        frame = requestAnimationFrame(step);
+        return;
+      }
+      carried += elapsed;
+      // 毎フレーム星空を再計算すると重いため、更新間隔をまとめる。
+      // 進める分は経過時間から出すので、間引いても速度は変わらない。
+      if (carried >= AUTO_ROTATION_STEP_MS) {
+        const minutes = carried / 1000 * AUTO_ROTATION_MINUTES_PER_SECOND;
+        carried = 0;
+        if (!shiftRotationRef.current(minutes)) {
+          setAutoRotating(false);
+          return;
+        }
+      }
+      frame = requestAnimationFrame(step);
+    };
+    frame = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(frame);
+  }, [autoRotating]);
+
+  const deviceTracking = deviceSky.isMobile && compassEnabled;
+  const activeViewMode: SkyViewMode = deviceTracking ? 'chart' : viewMode;
   const visibleStars = calculation.sky?.stars.filter((star) => isPointVisible(star, calculation.sky?.conditions.terrain)).length ?? 0;
 
   useEffect(() => {
@@ -212,6 +293,8 @@ export default function App() {
   };
 
   const toggleCompass = async () => {
+    // コンパス追従は全天星図に固定されるため、日周回転は止める。
+    setAutoRotating(false);
     if (compassEnabled) {
       setCompassEnabled(false);
       return;
@@ -244,8 +327,8 @@ export default function App() {
             location={location}
             magnitudeLimit={magnitudeLimit}
             error={calculation.error}
-            onDateChange={setDate}
-            onTimeChange={setTime}
+            onDateChange={(value) => { setDate(value); stopRotation(); }}
+            onTimeChange={(value) => { setTime(value); stopRotation(); }}
             onLocationChange={setLocation}
             onMagnitudeLimitChange={setMagnitudeLimit}
           />
@@ -256,10 +339,29 @@ export default function App() {
           <div className="stage-heading">
             <div>
               <p className="stage-kicker">THE SKY ABOVE</p>
-              <h2>{formatObservationDate(date)}</h2>
-              <p>{time} · {location.name}</p>
+              <h2>{formatObservationDate(observation.local?.date ?? date)}</h2>
+              <p>{observation.local?.time ?? time} · {location.name}</p>
             </div>
-            <span className="mode-badge"><span>◐</span>観測表示</span>
+            <div className="view-mode-switch" role="group" aria-label="表示モード">
+              <button
+                type="button"
+                className={activeViewMode === 'chart' ? 'active' : ''}
+                aria-pressed={activeViewMode === 'chart'}
+                disabled={deviceTracking}
+                onClick={() => { setViewMode('chart'); setAutoRotating(false); }}
+              >
+                <span aria-hidden="true">◐</span>星図
+              </button>
+              <button
+                type="button"
+                className={activeViewMode === 'globe' ? 'active' : ''}
+                aria-pressed={activeViewMode === 'globe'}
+                disabled={deviceTracking}
+                onClick={() => setViewMode('globe')}
+              >
+                <span aria-hidden="true">✳</span>天球儀
+              </button>
+            </div>
           </div>
 
           <div className="sky-card" ref={skyCardRef}>
@@ -292,16 +394,29 @@ export default function App() {
               </button>
             )}
             {calculation.sky ? (
-              <SkyCanvas
-                sky={calculation.sky}
-                options={options}
-                deviceMode={deviceSky.isMobile && compassEnabled}
-                compassEnabled={compassEnabled}
-                deviceView={compassEnabled ? deviceSky.view : null}
-                sensorStatus={deviceSky.status}
-                gpsStatus={gpsStatus}
-                location={location}
-              />
+              activeViewMode === 'globe' ? (
+                <>
+                  <GlobeCanvas sky={calculation.sky} options={options} location={location} />
+                  <DiurnalRotationBar
+                    rotationMinutes={rotationMinutes}
+                    autoRotating={autoRotating}
+                    onShift={shiftRotation}
+                    onToggleAuto={() => setAutoRotating((current) => !current)}
+                    onReset={stopRotation}
+                  />
+                </>
+              ) : (
+                <SkyCanvas
+                  sky={calculation.sky}
+                  options={options}
+                  deviceMode={deviceTracking}
+                  compassEnabled={compassEnabled}
+                  deviceView={compassEnabled ? deviceSky.view : null}
+                  sensorStatus={deviceSky.status}
+                  gpsStatus={gpsStatus}
+                  location={location}
+                />
+              )
             ) : (
               <div className="sky-error"><span>!</span><p>{calculation.error}</p></div>
             )}

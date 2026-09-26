@@ -1,6 +1,6 @@
 const formatterCache = new Map<string, Intl.DateTimeFormat>();
-const MIN_YEAR = 1900;
-const MAX_YEAR = 2100;
+export const MIN_YEAR = 1900;
+export const MAX_YEAR = 2100;
 
 function formatterFor(timezone: string) {
   let formatter = formatterCache.get(timezone);
@@ -99,6 +99,18 @@ export function localObservationToUtc(dateValue: string, timeValue: string, time
 
   // During a repeated autumn clock hour, consistently use the first occurrence.
   return candidates[0];
+}
+
+/** UTCの瞬間を、観測地の日付と時刻の入力形式へ戻す。 */
+export function zonedObservationStrings(date: Date, timezone: string) {
+  if (!isValidTimezone(timezone)) throw new Error('タイムゾーンが正しくありません。');
+  const parts = zonedParts(date, timezone);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return {
+    year: parts.year,
+    date: `${String(parts.year).padStart(4, '0')}-${pad(parts.month)}-${pad(parts.day)}`,
+    time: `${pad(parts.hour)}:${pad(parts.minute)}`,
+  };
 }
 
 export function formatObservationDate(dateValue: string) {

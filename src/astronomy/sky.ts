@@ -49,8 +49,12 @@ function horizontalPosition(raHours: number, decDegrees: number, siderealDegrees
   return { altitude, azimuth };
 }
 
-function starPoints(date: Date, observer: Observer, maximumMagnitude: number): SkyPoint[] {
-  const siderealDegrees = SiderealTime(date) * 15 + observer.longitude;
+/** 観測地の地方恒星時。度。 */
+export function localSiderealDegrees(date: Date, longitude: number) {
+  return SiderealTime(date) * 15 + longitude;
+}
+
+function starPoints(date: Date, observer: Observer, siderealDegrees: number, maximumMagnitude: number): SkyPoint[] {
   return CATALOG_STARS
     .filter((star) => star.magnitude <= maximumMagnitude)
     .map((star) => {
@@ -94,6 +98,7 @@ export function calculateSky(
 ): SkyModel {
   const elevation = conditions.terrain?.observerElevation ?? location.elevation;
   const observer = new Observer(location.latitude, location.longitude, elevation);
+  const siderealDegrees = localSiderealDegrees(date, location.longitude);
   const bodies = bodyPoints(date, observer);
   const sunAltitude = bodies.find((body) => body.kind === 'sun')?.altitude ?? -90;
   const moonAltitude = bodies.find((body) => body.kind === 'moon')?.altitude ?? -90;
@@ -108,8 +113,9 @@ export function calculateSky(
   );
 
   return {
-    stars: starPoints(date, observer, limit),
+    stars: starPoints(date, observer, siderealDegrees, limit),
     bodies,
+    siderealDegrees,
     sunAltitude,
     moonIllumination,
     moonPhase,

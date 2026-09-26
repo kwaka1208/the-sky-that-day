@@ -101,9 +101,13 @@ export interface ConstellationRecord {
   lines: Array<[string, string]>;
 }
 
+export type SkyViewMode = 'chart' | 'globe';
+
 export interface SkyModel {
   stars: SkyPoint[];
   bodies: SkyPoint[];
+  /** 観測地の地方恒星時。度。天球儀の赤道・黄道リング生成に使う。 */
+  siderealDegrees: number;
   sunAltitude: number;
   moonIllumination: number;
   moonPhase: number;
